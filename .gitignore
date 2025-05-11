@@ -176,3 +176,4 @@ cython_debug/
 
 temp/
 .DS_Store
+video_sous_titres.mp4
