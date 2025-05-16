@@ -2,7 +2,8 @@ import os
 import json
 import whisper
 import streamlit as st
-from moviepy import VideoFileClip, TextClip, CompositeVideoClip
+from moviepy import VideoFileClip, CompositeVideoClip
+from extensions.MoviePyExtension import TextClip
 
 # --- Fonctions utiles ---
 
@@ -32,40 +33,58 @@ def split_segments_into_short_segments(segments, max_words=5):
             })
     return new_segments
 
-def create_subtitle_clips(segments, video_width, video_height, font_path="Montserrat-Bold", font_size=60):
+def create_subtitle_clips(segments, video_width, video_height, font_path="Montserrat-Bold", font_size=60, style="classique"):
     subtitle_clips = []
     for segment in segments:
-        txt_clip = (TextClip(text=segment['text'].upper(),
-                            font=font_path,
-                            font_size=font_size,
-                            color='white',
-                            stroke_color='black',
-                            stroke_width=5,
-                            method='caption',
-                            size=(int(video_width * 0.8), None),
-                            text_align='center')
-                    .with_start(segment['start'])
-                    .with_end(segment['end'])
-                    .with_position(("center", video_height * 0.65)))
-        subtitle_clips.append(txt_clip)
+        if style == "classique (blanc + contour noir)":
+            txt_clip = (TextClip(text=segment['text'].upper(),
+                                font=font_path,
+                                font_size=font_size,
+                                color='white',
+                                stroke_color='black',
+                                stroke_width=5,
+                                method='caption',
+                                size=(int(video_width * 0.8), None),
+                                text_align='center')
+                                    .with_start(segment['start'])
+                                    .with_end(segment['end'])
+                                    .with_position(("center", video_height * 0.65)))
+            subtitle_clips.append(txt_clip)
+        
+        elif style == "bulle blanche arrondie (style TikTok)":
+            txt_clip = (TextClip(text=segment['text'],
+                                font=font_path,
+                                font_size=font_size,
+                                color='black',
+                                bg_color='white',
+                                method='caption',
+                                size=(int(video_width * 0.6), None),
+                                corner_radius=20,
+                                padding=(20,20,20,20),
+                                text_align='center')
+                                    .with_start(segment['start'])
+                                    .with_end(segment['end'])
+                                    .with_position(("center", video_height * 0.65)))
+            subtitle_clips.append(txt_clip)
+            
     return subtitle_clips
 
-def add_subtitles_to_video(video_path, segments, output_path, font_path="Montserrat-Bold"):
+def add_subtitles_to_video(video_path, segments, output_path, font_path="Montserrat-Bold", font_size=60, style="classique", logger=None):
     video = VideoFileClip(video_path)
-    subtitles = create_subtitle_clips(segments, video.w, video.h, font_path=font_path)
+    subtitles = create_subtitle_clips(segments, video.w, video.h, font_path=font_path, font_size=font_size, style=style)
     final = CompositeVideoClip([video] + subtitles)
-    final.write_videofile(output_path, codec="libx264", fps=30, audio_codec="aac", preset="medium")
+    final.write_videofile(output_path, codec="libx264", fps=30, audio_codec="aac", preset="medium", logger=logger)
 
 # --- Interface Streamlit ---
 
-st.set_page_config(layout="wide")
+st.set_page_config(layout="centered", page_title="Subtitles for Short Content")
 st.title("📝 Éditeur de sous-titres avec Whisper & MoviePy")
 
-# Upload de la vidéo
 video_file = st.file_uploader("🎥 Téléverse ta vidéo", type=["mp4", "mov"])
 font_path = st.text_input("🔤 Chemin de la police (.ttf ou .otf)", value="/Library/Fonts/insolent.otf")
 
 if video_file:
+    os.makedirs("temp", exist_ok=True)
     video_temp_path = f"temp/temp_video.{video_file.name.split('.')[-1]}"
     with open(video_temp_path, "wb") as f:
         f.write(video_file.read())
@@ -74,48 +93,72 @@ if video_file:
     video = VideoFileClip(video_temp_path)
     video.audio.write_audiofile(audio_path)
 
-    # Chargement unique de la transcription
     if "segments" not in st.session_state:
         st.info("⏳ Transcription en cours avec Whisper...")
         model = whisper.load_model("large")
         result = model.transcribe(audio_path)
         segments = split_segments_into_short_segments(result["segments"])
         st.session_state["segments"] = segments
-        st.success("✅ Transcription terminée. Tu peux corriger les sous-titres dans la colonne de gauche.")
+        st.success("✅ Transcription terminée. Tu peux corriger les sous-titres.")
 
-    # Layout en 3 colonnes
-    col1, col2, col3 = st.columns([3, 0.2, 3])
+    c1, c2 = st.columns(2)
 
-    # --- Colonne de gauche : édition des sous-titres
+    with c1:
+        subtitle_style = st.selectbox(
+            "🎨 Style des sous-titres",
+            ["classique (blanc + contour noir)", "bulle blanche arrondie (style TikTok)"]
+        )
+    with c2:
+        font_size = st.slider("🔠 Taille de la police", min_value=30, max_value=100, value=60, step=2)
+
+    col1, col2 = st.columns(2)
     edited_segments = []
-    
+
+    # --- Colonne de gauche : édition + boutons
     with col1:
         st.subheader("✍️ Édition des sous-titres")
-
-        with st.container(height=480):
+        with st.container(height=500):
             for i, seg in enumerate(st.session_state["segments"]):
                 key = f"segment_{i}"
+               # if key not in st.session_state:
+                    #st.session_state[key] = seg["text"]
+                start_key = f"start_{i}"
+                end_key = f"end_{i}"
+                if start_key not in st.session_state:
+                    st.session_state[start_key] = seg["start"]
+                if end_key not in st.session_state:
+                    st.session_state[end_key] = seg["end"]
+                
+                col_start, col_end = st.columns([1, 1])
+
+                start_time = col_start.number_input("⏱️ Début (s)", value=st.session_state[start_key], key=start_key, step=0.1, format="%.2f")
+                end_time = col_end.number_input("⏱️ Fin (s)", value=st.session_state[end_key], key=end_key, step=0.1, format="%.2f")
+
                 if key not in st.session_state:
                     st.session_state[key] = seg["text"]
-
-                text = st.text_input(
-                    f"[{seg['start']}s → {seg['end']}s]",
-                    value=st.session_state[key],
-                    key=key
-                )
-
+                
+                text = st.text_area("💬 Texte", value=st.session_state[key], key=key, height=80)
+                #start_time = st.number_input("⏱️ Début (s)", value=st.session_state[start_key], key=start_key, step=0.1, format="%.2f")
+                #end_time = st.number_input("⏱️ Fin (s)", value=st.session_state[end_key], key=end_key, step=0.1, format="%.2f")
+                st.markdown("""
+   
+                """, unsafe_allow_html=True)
+                #text = st.text_input(
+                 #   f"[{seg['start']}s → {seg['end']}s]",
+                  #  value=st.session_state[key],
+                   # key=key
+                #)
                 edited_segments.append({
-                    "start": seg["start"],
-                    "end": seg["end"],
+                    "start": start_time,
+                    "end": end_time,
                     "text": text
                 })
 
-    # --- Colonne de droite : aperçu vidéo
-    with col3:
-        st.subheader("🎬 Aperçu de la vidéo")
+    # --- Colonne de droite : aperçu vidéo + sous-titres dynamiques
+    with col2:
+        st.subheader("🎬 Vidéo")
         st.video(video_temp_path)
-
-    # --- Actions sous les colonnes
+    # --- Boutons d'action
     st.markdown("---")
     col_left, col_right = st.columns(2)
 
@@ -123,22 +166,19 @@ if video_file:
         if st.button("💾 Sauvegarder les sous-titres en JSON"):
             with open("subtitles_edited.json", "w", encoding="utf-8") as f:
                 json.dump(edited_segments, f, ensure_ascii=False, indent=2)
-            st.success("Sous-titres sauvegardés dans `subtitles_edited.json`")
+            st.success("✅ Sous-titres sauvegardés dans subtitles_edited.json")
 
     with col_right:
         if st.button("🎥 Générer la vidéo finale"):
+            st.info("⏳ La vidéo est en cours de génération")
             output_path = "video_sous_titres.mp4"
-            add_subtitles_to_video(video_temp_path, edited_segments, output_path, font_path)
+            add_subtitles_to_video(video_temp_path, edited_segments, output_path, font_path, font_size=font_size, style=subtitle_style)
             st.success("✅ Vidéo générée avec succès !")
-
             st.video(output_path)
-
             with open(output_path, "rb") as f:
-                video_bytes = f.read()
-
-            st.download_button(
-                label="📥 Télécharger la vidéo",
-                data=video_bytes,
-                file_name="video_sous_titres.mp4",
-                mime="video/mp4"
-            )
+                st.download_button(
+                    label="📥 Télécharger la vidéo",
+                    data=f.read(),
+                    file_name="video_sous_titres.mp4",
+                    mime="video/mp4"
+                )
